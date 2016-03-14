@@ -50,35 +50,39 @@ class FilterScheduler(driver.Scheduler):
         self.notifier.info(
             context, 'scheduler.select_destinations.start',
             dict(request_spec=spec_obj.to_legacy_request_spec_dict()))
-        
-        db = MySQLdb.connect("127.0.0.1","root","password","nova")
-		cursor = db.cursor()
-		#get the toal memory of the system and memory used
-		cursor.execute("select memory_mb,memory_mb_used from compute_nodes")
-		data = cursor.fetchall()
-		
-		for row in data:
-			total_memory = row[0]
-			memory_used = row[1]
-			LOG.debug('Memory %(memory)s',{'memory': total_memory})
-			LOG.debug('Memory Used %(memory_used)s', {'memory_used': memory_used})
+	
+	request = dict(request_spec=spec_obj.to_legacy_request_spec_dict())
+	LOG.debug('Request Object as dict is: %(diction)s', {'diction': request['request_spec']})
+	flavor = request['request_spec']['instance_type']
+	LOG.debug('Flavor name %(name)s', {'name':flavor.name})
+	instance_type = flavor.name
+	
+	db = MySQLdb.connect("127.0.0.1","root","password","nova")
+	cursor = db.cursor()
+	#get the toal memory of the system and memory used
+	cursor.execute("select memory_mb,memory_mb_used from compute_nodes")
+	data = cursor.fetchall()
+	
+	for row in data:
+		total_memory = row[0]
+		memory_used = row[1]
+		LOG.debug('Memory %(memory)s',{'memory': total_memory})
+		LOG.debug('Memory Used %(memory_used)s', {'memory_used': memory_used})
 
-		cursor.execute("select vcpus,vcpus_used from compute_nodes")
-		data = cursor.fetchall()
-		
-		for row in data:
-			vcpus = row[0]
-			vcpus_used = row[1]
-			LOG.debug('Virtual CPUs %(vcpus)s',{'vcpus': vcpus})
-	                LOG.debug('Virtual CPUs Used %(vcpus_used)s', {'vcpus_used': vcpus_used})
-
-		
-		db.close()
-
-        num_instances = spec_obj.num_instances
-        selected_hosts = self._schedule(context, spec_obj)
+	cursor.execute("select vcpus,vcpus_used from compute_nodes")
+	data = cursor.fetchall()
+	
+	for row in data:
+		vcpus = row[0]
+		vcpus_used = row[1]
+		LOG.debug('Virtual CPUs %(vcpus)s',{'vcpus': vcpus})
+                LOG.debug('Virtual CPUs Used %(vcpus_used)s', {'vcpus_used': vcpus_used})
 
 	
+	db.close()
+
+	num_instances = spec_obj.num_instances
+        selected_hosts = self._schedule(context, spec_obj)
         # Couldn't fulfill the request_spec
         if len(selected_hosts) < num_instances:
             # NOTE(Rui Chen): If multiple creates failed, set the updated time
@@ -170,4 +174,3 @@ class FilterScheduler(driver.Scheduler):
     def _get_all_host_states(self, context):
         """Template method, so a subclass can implement caching."""
         return self.host_manager.get_all_host_states(context)
-
