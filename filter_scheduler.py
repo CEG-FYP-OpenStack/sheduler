@@ -53,65 +53,156 @@ class FilterScheduler(driver.Scheduler):
             context, 'scheduler.select_destinations.start',
             dict(request_spec=spec_obj.to_legacy_request_spec_dict()))
 	
-	request = dict(request_spec=spec_obj.to_legacy_request_spec_dict())
-	LOG.debug('Request Object as dict is: %(diction)s', {'diction': request['request_spec']})
-	flavor = request['request_spec']['instance_type']
-	LOG.debug('Flavor name %(name)s', {'name': type(str(flavor.name))})
-	instance_type = flavor.name
-	instance_data = {}
-	allowed_list = []
-	threshold_manager = ThresholdManager()
-	attributes = threshold_manager.get_attributes()
-	LOG.debug('Threshold manager %(attr)s', {'attr': attributes})
-	if 'on_demand_high' in attributes:
-		allowed_list.append('tiny.on-demand')
-	if 'on_demand_low' in attributes:
-		allowed_list.append('tiny.on-demand')
-	if 'spot' in attributes:
-		allowed_list.append('tiny.spot')
-	# LOG.debug('Allowed list %(allowed)s', {'allowed': allowed_list})
-	# if str(flavor.name) == 'tiny.on-demand':
-	# 	LOG.debug('Found tiny on demand')
+    	request = dict(request_spec=spec_obj.to_legacy_request_spec_dict())
+    	LOG.debug('Request Object as dict is: %(diction)s', {'diction': request['request_spec']})
+    	flavor = request['request_spec']['instance_type']
+    	LOG.debug('Flavor name %(name)s', {'name': type(str(flavor.name))})
 
-	if str(flavor.name) not in allowed_list:
-		LOG.debug('Server seems to be loaded. %(flavor_name)s cannot be created', {'flavor_name': flavor.name})
-		reason = _('Server load')
-		raise exception.NoValidHost(reason=reason)
+        vm_instance_properties = request['request_spec']['instance_properties']
+        vm_ram = vm_instance_properties['memory_mb']
+        vm_vcpus = vm_instance_properties['vcpus']
+        vm_disk = int(flavor.root_gb)
 
-	num_instances = spec_obj.num_instances
-        selected_hosts = self._schedule(context, spec_obj)
-        # Couldn't fulfill the request_spec
-        if len(selected_hosts) < num_instances:
-            # NOTE(Rui Chen): If multiple creates failed, set the updated time
-            # of selected HostState to None so that these HostStates are
-            # refreshed according to database in next schedule, and release
-            # the resource consumed by instance in the process of selecting
-            # host.
-            for host in selected_hosts:
-                host.obj.updated = None
+        vm_details = {}
+        vm['disk'] = vm_disk
+        vm['ram'] = vm_ram
+        vm['vcpus'] = vm_vcpus
 
-            # Log the details but don't put those into the reason since
-            # we don't want to give away too much information about our
-            # actual environment.
-            LOG.debug('There are %(hosts)d hosts available but '
-                      '%(num_instances)d instances requested to build.',
-                      {'hosts': len(selected_hosts),
-                       'num_instances': num_instances})
+        instance_manager = InstanceManager()
+        node_details = instance_manager.node_details
 
-            reason = _('There are not enough hosts available.')
-            raise exception.NoValidHost(reason=reason)
+    	instance_type = flavor.name
+        instance_data = {}
+    	allowed_list = []
+    	threshold_manager = ThresholdManager()
+    	attributes = threshold_manager.get_attributes()
+    	LOG.debug('Threshold manager %(attr)s', {'attr': attributes})
 
-        dests = [dict(host=host.obj.host, nodename=host.obj.nodename,
-                      limits=host.obj.limits) for host in selected_hosts]
+    	if 'on_demand_high' in attributes:
+    		allowed_list.append('tiny.on-demand')
+    	if 'on_demand_low' in attributes:
+    		allowed_list.append('tiny.on-demand')
+    	if 'spot' in attributes:
+    		allowed_list.append('tiny.spot')
+    	# LOG.debug('Allowed list %(allowed)s', {'allowed': allowed_list})
+    	# if str(flavor.name) == 'tiny.on-demand':
+    	# 	LOG.debug('Found tiny on demand')
 
-        self.notifier.info(
-            context, 'scheduler.select_destinations.end',
-            dict(request_spec=spec_obj.to_legacy_request_spec_dict()))
+    	if str(flavor.name) not in allowed_list:
+    		LOG.debug('Server seems to be loaded. %(flavor_name)s cannot be created', {'flavor_name': flavor.name})
+    		reason = _('Server load')
+    		raise exception.NoValidHost(reason=reason)
+
+    	num_instances = spec_obj.num_instances
+            # selected_hosts = self._schedule(context, spec_obj)
+            # # Couldn't fulfill the request_spec
+            # if len(selected_hosts) < num_instances:
+            #     # NOTE(Rui Chen): If multiple creates failed, set the updated time
+            #     # of selected HostState to None so that these HostStates are
+            #     # refreshed according to database in next schedule, and release
+            #     # the resource consumed by instance in the process of selecting
+            #     # host.
+            #     for host in selected_hosts:
+            #         host.obj.updated = None
+
+            #     # Log the details but don't put those into the reason since
+            #     # we don't want to give away too much information about our
+            #     # actual environment.
+            #     LOG.debug('There are %(hosts)d hosts available but '
+            #               '%(num_instances)d instances requested to build.',
+            #               {'hosts': len(selected_hosts),
+            #                'num_instances': num_instances})
+
+            #     reason = _('There are not enough hosts available.')
+            #     raise exception.NoValidHost(reason=reason)
+
+            # dests = [dict(host=host.obj.host, nodename=host.obj.nodename,
+            #               limits=host.obj.limits) for host in selected_hosts]
+
+            # self.notifier.info(
+            #     context, 'scheduler.select_destinations.end',
+            #     dict(request_spec=spec_obj.to_legacy_request_spec_dict()))
+            # return dests
+
+        result_nodes = []
+        for i in num_instances:
+            result = self.best_fit(vm_details, node_details)
+            result_nodes.append(result)
+
+        dests = [dict(host=node['nodename'], nodename=node['hostname']) for node in result_nodes]
+
         return dests
 
     def _get_configuration_options(self):
         """Fetch options dictionary. Broken out for testing."""
         return self.options.get_configuration()
+
+    def best_fit_with_migration(vm, node_details):
+        """Returns a best fit node"""
+        result_node = None
+        min_migration_list = []
+        min_no_of_migration = sys.maxint
+        min_migration_data = sys.maxint
+        result_node = self.best_fit(vm, node_details)
+
+        if len(result_node) ==  0:
+            flag = False
+            instance_manager = InstanceManager()
+            feasible_nodes = instance_manager.feasible_nodes(vm)
+            for f in feasible_nodes:
+                local_migration_list = []
+                local_no_migration = 0
+                local_migration_data = 0
+                vm_list = instance_manager.vm_list(f['hostname'])
+
+                temp_node_details = node_details
+                for v in vm_list:
+                    dest_node = best_fit(v, temp_node_details)
+                    if dest_node == None:
+                        continue
+                    else:
+                        local_migration_list.append(tuple(v,dest_node))
+                        local_no_migration += 1
+                        local_migration_data = local_migration_data + v['disk']
+
+                        new_vm_disk = dest_node['total_disk'] - dest_node['free_disk'] - v['disk']
+                        new_vm_ram = dest_node['total_ram'] - dest_node['free_ram'] - v['ram']
+                        new_vm_vcpus = dest_node['total_vcpus'] - dest_node['free_vcpus'] - v['vcpus']
+
+                        if new_vm_disk >= vm['disk'] and new_vm_vcpus >= vm['vcpus'] and new_vm_ram >= vm['ram']:
+                            flag = True
+                            break
+
+            if flag == True:
+                if local_no_migration < min_no_of_migration:
+                    min_no_of_migration = local_no_migration
+                    min_migration_data = local_migration_data
+                    min_migration_list = local_migration_list
+                    result_node = f['nodename']
+                elif local_no_migration == min_no_of_migration:
+                    if local_migration_data < min_migration_data:
+                        min_no_of_migration = local_no_migration
+                        min_migration_data = local_migration_data
+                        min_migration_list = local_migration_list
+                        result_node = f['nodename']
+
+        return result_node    
+
+    def best_fit(vm, node_details):
+        weights = [1,2,3]
+        result_node = None
+        cur_ratio = 1.0
+        for n in node_details:
+            disk_ratio = (n['free_disk'] - vm['disk'])/n['total_disk']
+            ram_ratio = (n['free_ram'] - vm['ram'])/n['total_ram']
+            vcpus_ratio = (n['free_vcpus'] - vm['vcpus'])/n['total_vcpus']
+
+            if disk_ratio >= 0 and ram_ratio >= 0 and vcpus_ratio >= 0:
+                total_ratio = weights[0]*disk_ratio + weights[1]*ram_ratio + weights[2]*vcpus_ratio
+                if total_ratio < cur_ratio:
+                    cur_ratio = total_ratio
+                    result_node = n.nodename
+        return result_node
 
     def _schedule(self, context, spec_obj):
         """Returns a list of hosts that meet the required specs,
@@ -130,42 +221,45 @@ class FilterScheduler(driver.Scheduler):
         # traverse this list once. This can bite you if the hosts
         # are being scanned in a filter or weighing function.
         hosts = self._get_all_host_states(elevated)
-	
+        	
         selected_hosts = []
         num_instances = spec_obj.num_instances
+
+
+
         # NOTE(sbauza): Adding one field for any out-of-tree need
-        spec_obj.config_options = config_options
-        for num in range(num_instances):
-            # Filter local hosts based on requirements ...
-            hosts = self.host_manager.get_filtered_hosts(hosts,
-                    spec_obj, index=num)
-            if not hosts:
-                # Can't get any more locally.
-                break
+        # spec_obj.config_options = config_options
+        # for num in range(num_instances):
+        #     # Filter local hosts based on requirements ...
+        #     hosts = self.host_manager.get_filtered_hosts(hosts,
+        #             spec_obj, index=num)
+        #     if not hosts:
+        #         # Can't get any more locally.
+        #         break
 
-            LOG.debug("Filtered %(hosts)s", {'hosts': hosts})
+        #     LOG.debug("Filtered %(hosts)s", {'hosts': hosts})
 
-            weighed_hosts = self.host_manager.get_weighed_hosts(hosts,
-                    spec_obj)
+        #     weighed_hosts = self.host_manager.get_weighed_hosts(hosts,
+        #             spec_obj)
 
-            LOG.debug("Weighed %(hosts)s", {'hosts': weighed_hosts})
+        #     LOG.debug("Weighed %(hosts)s", {'hosts': weighed_hosts})
 
-            scheduler_host_subset_size = max(1,
-                                             CONF.scheduler_host_subset_size)
-            if scheduler_host_subset_size < len(weighed_hosts):
-                weighed_hosts = weighed_hosts[0:scheduler_host_subset_size]
-            chosen_host = random.choice(weighed_hosts)
+        #     scheduler_host_subset_size = max(1,
+        #                                      CONF.scheduler_host_subset_size)
+        #     if scheduler_host_subset_size < len(weighed_hosts):
+        #         weighed_hosts = weighed_hosts[0:scheduler_host_subset_size]
+        #     chosen_host = random.choice(weighed_hosts)
 
-            LOG.debug("Selected host: %(host)s", {'host': chosen_host})
-            selected_hosts.append(chosen_host)
+        #     LOG.debug("Selected host: %(host)s", {'host': chosen_host})
+        #     selected_hosts.append(chosen_host)
 
-            # Now consume the resources so the filter/weights
-            # will change for the next instance.
-            chosen_host.obj.consume_from_request(spec_obj)
-            if spec_obj.instance_group is not None:
-                spec_obj.instance_group.hosts.append(chosen_host.obj.host)
-                # hosts has to be not part of the updates when saving
-                spec_obj.instance_group.obj_reset_changes(['hosts'])
+        #     # Now consume the resources so the filter/weights
+        #     # will change for the next instance.
+        #     chosen_host.obj.consume_from_request(spec_obj)
+        #     if spec_obj.instance_group is not None:
+        #         spec_obj.instance_group.hosts.append(chosen_host.obj.host)
+        #         # hosts has to be not part of the updates when saving
+        #         spec_obj.instance_group.obj_reset_changes(['hosts'])
         return selected_hosts
 
     def _get_all_host_states(self, context):
