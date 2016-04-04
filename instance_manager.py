@@ -79,4 +79,5 @@ class InstanceManager(object):
 
 			vm_list.append(vm_data)
 
+		
 		return vm_list
